@@ -428,7 +428,6 @@ function Avatar({ email, tooltip }: { email: string; tooltip: string }) {
   return (
     <div
       style={{
-        background: "#eee",
         borderRadius: 6,
         width: 32,
         height: 32,
