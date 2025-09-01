@@ -122,7 +122,11 @@ async function digestMessage(message: string) {
 
 type FetchFn = <T>(...args: Parameters<typeof fetch>) => Promise<T>;
 
-async function fetchHoozinData(fetchWithCache: FetchFn, dispatch: React.Dispatch<Action>) {
+async function fetchHoozinData(
+  fetchWithCache: FetchFn,
+  dispatch: React.Dispatch<Action>,
+  options: { minDate: Temporal.PlainDate; maxDate: Temporal.PlainDate }
+) {
   let url = new URL("https://content-people.googleapis.com/v1/people:listDirectoryPeople");
   url.searchParams.set("readMask", "names,emailAddresses,calendarUrls");
   url.searchParams.set("sources", "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE");
@@ -149,24 +153,27 @@ async function fetchHoozinData(fetchWithCache: FetchFn, dispatch: React.Dispatch
     );
     url.searchParams.set("eventTypes", "workingLocation");
     url.searchParams.set("maxResults", "100");
-    url.searchParams.set("orderBy", "startTime");
+    url.searchParams.set("orderBy", "updated");
     url.searchParams.set("showDeleted", "false");
     url.searchParams.set("showHiddenInvitations", "false");
     url.searchParams.set("singleEvents", "true");
     url.searchParams.set(
       "timeMin",
-      Temporal.Now.plainDateTimeISO()
-        .subtract({ days: 1 })
-        .with({
-          hour: 0,
-          minute: 0,
-          second: 0,
-          millisecond: 0,
-        })
+      options.minDate.toPlainDateTime({ hour: 0, minute: 0, second: 0, millisecond: 0 }).toString({
+        fractionalSecondDigits: 0,
+      }) + "Z"
+    );
+    url.searchParams.set(
+      "timeMax",
+      options.maxDate
+        .add({ days: 1 })
+        .toPlainDateTime({ hour: 0, minute: 0, second: 0, millisecond: 0 })
         .toString({
           fractionalSecondDigits: 0,
         }) + "Z"
     );
+    url.searchParams.set("timeZone", "Europe/Oslo");
+
     const data: { items: GoogleCalendarEvent[] } = await fetchWithCache(url);
     for (const calendarEvent of data.items) {
       dispatch({ type: "ADD_PERSON_EVENT", email, calendarEvent });
@@ -535,6 +542,19 @@ function workingDate(date: Temporal.PlainDate = Temporal.Now.plainDateISO()) {
   return nextDay;
 }
 
+const useDevlog =
+  import.meta.env.MODE === "development"
+    ? function useDevlog<T>(state: T) {
+        useEffect(() => {
+          const timeout = setTimeout(() => {}, 500);
+
+          return () => {
+            clearTimeout(timeout);
+          };
+        }, [state]);
+      }
+    : function noop() {};
+
 function Hoozin() {
   const { fetch } = useGoogleToken();
   const [state, dispatch] = useReducer(stateReducer, {
@@ -542,10 +562,6 @@ function Hoozin() {
     ignorePeople: [],
     people: [],
   });
-
-  useEffect(() => {
-    fetchHoozinData(fetch, dispatch);
-  }, [fetch, dispatch]);
 
   const days = useMemo(() => {
     const days: Temporal.PlainDate[] = [workingDate()];
@@ -556,6 +572,13 @@ function Hoozin() {
 
     return days;
   }, []);
+
+  useEffect(() => {
+    if (days.length === 0) return;
+    fetchHoozinData(fetch, dispatch, { minDate: days[0], maxDate: days[days.length - 1] });
+  }, [days, fetch, dispatch]);
+
+  useDevlog(state);
 
   return (
     <div
