@@ -114,6 +114,7 @@ h2 {
   width: 100vw;
   height: 100dvh;
   box-sizing: border-box;
+  padding: 2rem;
   overflow: scroll;
 }
 

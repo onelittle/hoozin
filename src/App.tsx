@@ -623,6 +623,7 @@ function DateSummary({
             alignItems: "flex-end",
             gridTemplateColumns: "2fr 1fr 2fr",
             gap: "2em",
+            paddingBottom: "0.25em",
           }}
         >
           <h2
