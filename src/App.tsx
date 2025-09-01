@@ -485,10 +485,14 @@ function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
 
   const handleGoogleAuth = useCallback(
     async function handleGoogleAuth() {
+      const login_hint = localStorage.getItem("loginHint");
+
       const token = await new Promise<TokenResponse>((resolve) => {
         // @ts-expect-error missing types
         const tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID,
+          login_hint,
+          prompt: login_hint ? "none" : "consent",
           scope:
             "profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/directory.readonly",
           callback: (tokenResponse: TokenResponse) => {
@@ -498,6 +502,14 @@ function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
         });
         tokenClient.requestAccessToken();
       });
+
+      if (!login_hint) {
+        const response = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+          headers: { Authorization: `Bearer ${token.access_token}` },
+        });
+        const profile: { email: string } = await response.json();
+        localStorage.setItem("loginHint", profile.email);
+      }
 
       localStorage.setItem("googleToken", JSON.stringify(token));
       setToken(token);
