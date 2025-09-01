@@ -515,7 +515,7 @@ function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Avatar({ email, tooltip }: { email: string; tooltip: string }) {
+function Avatar({ name, email, tooltip }: { name: string; email: string; tooltip: string }) {
   const [hash, setHash] = useState<string | null>(null);
 
   useEffect(() => {
@@ -523,7 +523,8 @@ function Avatar({ email, tooltip }: { email: string; tooltip: string }) {
     digestMessage(email.trim().toLowerCase()).then(setHash);
   }, [hash, email]);
 
-  const initials = email.split("@")[0].toUpperCase();
+  const allInitials = name.split(" ").map((part) => part[0].toUpperCase());
+  const initials = allInitials[0] + allInitials[allInitials.length - 1];
 
   return (
     <div
@@ -654,6 +655,7 @@ function DateSummary({
           {byStatus["homeOffice"].map(({ name, email }) => {
             return (
               <Avatar
+                name={name}
                 key={email}
                 email={email}
                 tooltip={`${displayName(name, state.people)} working from home`}
@@ -676,6 +678,7 @@ function DateSummary({
           {byStatus["officeLocation"].map(({ name, email }) => {
             return (
               <Avatar
+                name={name}
                 key={email}
                 email={email}
                 tooltip={`${displayName(name, state.people)} is in the office`}
