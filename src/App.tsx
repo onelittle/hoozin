@@ -429,6 +429,33 @@ async function cacheFetch<T>(
   return data;
 }
 
+function purgeCache() {
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)!;
+    try {
+      const data = JSON.parse(localStorage.getItem(key) ?? "null");
+      if (data && typeof data === "object" && "expiresAt" in data) {
+        const { expiresAt } = data as { expiresAt: string };
+        if (
+          Temporal.PlainDateTime.compare(
+            Temporal.Now.plainDateTimeISO(),
+            Temporal.PlainDateTime.from(expiresAt)
+          ) >= 0
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+  for (const key of keysToRemove) {
+    localStorage.removeItem(key);
+  }
+}
+purgeCache();
+
 function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<TokenResponse | null>(() => {
     const oldValue = localStorage.getItem("googleToken");
