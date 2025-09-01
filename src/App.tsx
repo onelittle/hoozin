@@ -303,6 +303,59 @@ function useGoogleToken() {
   return useContext(GoogleTokenContext);
 }
 
+async function cacheFetch<T>(
+  key: string,
+  options: { ttl: Temporal.Duration | Temporal.DurationLike },
+  fetcher: () => Promise<T>
+): Promise<T> {
+  const cached = localStorage.getItem(key);
+  if (cached) {
+    const data = JSON.parse(cached) as unknown;
+    if (data && typeof data === "object" && "expiresAt" in data) {
+      const { expiresAt } = data as { expiresAt: string; data: unknown };
+      if (
+        Temporal.PlainDateTime.compare(
+          Temporal.Now.plainDateTimeISO(),
+          Temporal.PlainDateTime.from(expiresAt)
+        ) < 0
+      ) {
+        if (data && typeof data === "object" && "data" in data) {
+          return Promise.resolve(data.data as T);
+        } else {
+          console.log("Invalid cache data (missing data key or bad shape)", data);
+        }
+      } else {
+        console.log("Invalid cache data (expired)", data);
+      }
+    } else {
+      console.log("Invalid cache data (missing TTL)", data);
+    }
+  } else {
+    console.log("Cache miss for", key);
+  }
+  const data = await fetcher();
+
+  try {
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        expiresAt: Temporal.Now.plainDateTimeISO().add(options.ttl).toString(),
+        data,
+      })
+    );
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      // Clear the entire cache if we exceed quota
+      console.warn("Cleared cache due to quota exceeded");
+      localStorage.clear();
+    } else {
+      throw error;
+    }
+  }
+
+  return data;
+}
+
 function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<TokenResponse | null>(() => {
     const oldValue = localStorage.getItem("googleToken");
@@ -311,34 +364,21 @@ function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
 
   const fetchWithCache = useCallback(
     async function fetchWithCache(url: URL | RequestInfo, options?: RequestInit) {
-      const cacheKey = await digestMessage(url.toString() + "V1");
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
-      }
-      const response = await fetch(url, {
-        ...options,
-        headers: { ...options?.headers, Authorization: `Bearer ${token?.access_token}` },
-      });
-      const data = await response.json();
-      try {
+      const cacheKey = await digestMessage(url.toString() + "V2");
+      return cacheFetch(cacheKey, { ttl: { minutes: 5 } }, async () => {
+        const response = await fetch(url, {
+          ...options,
+          headers: { ...options?.headers, Authorization: `Bearer ${token?.access_token}` },
+        });
+        const data = await response.json();
         if (response.status === 401) {
           // Token expired or invalid
           setToken(null);
           localStorage.removeItem("googleToken");
           throw new Error("Unauthorized, please sign in again");
         }
-        if (response.status == 200) {
-          localStorage.setItem(cacheKey, JSON.stringify(data));
-        }
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "QuotaExceededError") {
-          // Clear the entire cache if we exceed quota
-          console.warn("Cleared cache due to quota exceeded");
-          localStorage.clear();
-        }
-      }
-      return data;
+        return data;
+      });
     },
     [token, setToken]
   );
