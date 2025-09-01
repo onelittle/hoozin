@@ -515,7 +515,7 @@ function DateSummary({
               fontWeight: "800",
             }}
           >
-            Office
+            Remote
           </h2>
           <h2 style={{ textAlign: "center" }}>{title}</h2>
           <h2
@@ -527,7 +527,7 @@ function DateSummary({
               fontWeight: "800",
             }}
           >
-            Remote
+            Office
           </h2>
         </div>
       ) : (
