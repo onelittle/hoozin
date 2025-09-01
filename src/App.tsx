@@ -43,13 +43,40 @@ type GoogleCalendarEvent =
       end: { dateTime: string };
     };
 
+type WorkLocation = "homeOffice" | "officeLocation" | "unknown";
+
+function workLocation(value: string | null): WorkLocation {
+  if (value === "homeOffice" || value === "officeLocation" || value === "unknown") {
+    return value;
+  }
+  return "unknown";
+}
+
+function ignorePeople(value: string | null): Set<string> {
+  if (value) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+        return new Set(parsed);
+      }
+    } catch {
+      // Ignore invalid JSON
+    }
+  }
+  return new Set();
+}
+
 type State = {
-  people: string[];
-  ignorePeople: string[];
+  people: {
+    email: string;
+    name: string;
+  }[];
+  ignorePeople: Set<string>;
+  assumedLocation: WorkLocation;
   events: {
     date: string;
     personEmail: string;
-    status: "homeOffice" | "officeLocation" | "unknown";
+    location: WorkLocation;
   }[];
 };
 
@@ -62,6 +89,16 @@ type Action =
   | {
       type: "DISCOVERED_PERSON";
       email: string;
+      name: string;
+    }
+  | {
+      type: "UPDATE_PREFERRED_LOCATION";
+      location: WorkLocation;
+    }
+  | {
+      type: "UPDATE_IGNORE_STATE";
+      email: string;
+      ignored: boolean;
     };
 
 function stateReducer(currentState: State, action: Action): State {
@@ -80,9 +117,9 @@ function stateReducer(currentState: State, action: Action): State {
           );
           const status = workingLocationProperties.type ?? "unknown";
           if (stateEntry) {
-            stateEntry.status = status;
+            stateEntry.location = status;
           } else {
-            stateEntry = { date: dateString, personEmail: email, status };
+            stateEntry = { date: dateString, personEmail: email, location: status };
             newEvents.push(stateEntry);
           }
           currentDate = currentDate.add({ days: 1 });
@@ -90,6 +127,7 @@ function stateReducer(currentState: State, action: Action): State {
         return {
           events: newEvents,
           ignorePeople: currentState.ignorePeople,
+          assumedLocation: currentState.assumedLocation,
           people: currentState.people,
         };
       } else {
@@ -98,13 +136,43 @@ function stateReducer(currentState: State, action: Action): State {
       }
     }
     case "DISCOVERED_PERSON": {
-      if (currentState.people.includes(action.email)) {
+      if (currentState.people.findIndex((p) => p.email === action.email) > -1) {
         return currentState;
       }
       return {
         events: currentState.events,
         ignorePeople: currentState.ignorePeople,
-        people: [...currentState.people, action.email],
+        assumedLocation: currentState.assumedLocation,
+        people: [
+          ...currentState.people,
+          {
+            email: action.email,
+            name: action.name,
+          },
+        ],
+      };
+    }
+    case "UPDATE_PREFERRED_LOCATION": {
+      return {
+        events: currentState.events,
+        ignorePeople: currentState.ignorePeople,
+        assumedLocation: action.location,
+        people: currentState.people,
+      };
+    }
+    case "UPDATE_IGNORE_STATE": {
+      let newIgnoreList = Array.from(currentState.ignorePeople);
+      if (action.ignored) {
+        // Remove from ignore list
+        newIgnoreList = newIgnoreList.filter((email) => email !== action.email);
+      } else {
+        newIgnoreList = [...newIgnoreList, action.email];
+      }
+      return {
+        events: currentState.events,
+        ignorePeople: new Set(newIgnoreList),
+        assumedLocation: currentState.assumedLocation,
+        people: currentState.people,
       };
     }
     default:
@@ -145,8 +213,9 @@ async function fetchHoozinData(
     if (!email) {
       continue;
     }
+    const name = person.names?.find((n) => n.metadata?.primary)?.displayName || email;
 
-    dispatch({ type: "DISCOVERED_PERSON", email });
+    dispatch({ type: "DISCOVERED_PERSON", email, name });
 
     url = new URL(
       `https://content.googleapis.com/calendar/v3/calendars/${encodeURIComponent(email)}/events`
@@ -346,8 +415,12 @@ async function cacheFetch<T>(
   } catch (error) {
     if (error instanceof DOMException && error.name === "QuotaExceededError") {
       // Clear the entire cache if we exceed quota
+      const preferredLocation = localStorage.getItem("preferredLocation");
       console.warn("Cleared cache due to quota exceeded");
       localStorage.clear();
+      if (preferredLocation) {
+        localStorage.setItem("preferredLocation", preferredLocation);
+      }
     } else {
       throw error;
     }
@@ -471,25 +544,32 @@ function DateSummary({
   showLegend: boolean;
   opacity?: number;
 }) {
-  const entriesForDate = state.events.filter((entry) => entry.date === date.toString());
+  const entriesForDate = state.events.filter(
+    (entry) => entry.date === date.toString() && !state.ignorePeople.has(entry.personEmail)
+  );
+  const peopleByEmail = new Map(state.people.map((p) => [p.email, p]));
   const seenEmails = entriesForDate.map((entry) => entry.personEmail);
-  const missingPeople = state.people.filter((email) => !seenEmails.includes(email));
+  const missingPeople = state.people.filter(
+    (person) => !seenEmails.includes(person.email) && !state.ignorePeople.has(person.email)
+  );
 
-  const byStatus: Record<string, string[]> = {
+  const byStatus: Record<string, { email: string; name: string }[]> = {
     officeLocation: [],
     homeOffice: [],
   };
   for (const entry of entriesForDate) {
-    if (!byStatus[entry.status]) {
-      byStatus[entry.status] = [];
+    if (!byStatus[entry.location]) {
+      byStatus[entry.location] = [];
     }
-    byStatus[entry.status].push(entry.personEmail);
+    const person = peopleByEmail.get(entry.personEmail);
+    if (!person) continue;
+    byStatus[entry.location].push(person);
   }
-  for (const email of missingPeople) {
-    if (!byStatus["unknown"]) {
-      byStatus["unknown"] = [];
+  for (const person of missingPeople) {
+    if (!byStatus[state.assumedLocation]) {
+      byStatus[state.assumedLocation] = [];
     }
-    byStatus["unknown"].push(email);
+    byStatus[state.assumedLocation].push(person);
   }
 
   const title = humanDate(date);
@@ -544,8 +624,14 @@ function DateSummary({
         <div
           style={{ display: "flex", flexDirection: "row-reverse", flexWrap: "wrap", gap: "0.5em" }}
         >
-          {byStatus["homeOffice"].map((email) => {
-            return <Avatar key={email} email={email} tooltip={`${email} working from home`} />;
+          {byStatus["homeOffice"].map(({ name, email }) => {
+            return (
+              <Avatar
+                key={email}
+                email={email}
+                tooltip={`${displayName(name, state.people)} working from home`}
+              />
+            );
           })}
         </div>
         <div>
@@ -560,8 +646,14 @@ function DateSummary({
           )}
         </div>
         <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "0.5em" }}>
-          {byStatus["officeLocation"].map((email) => {
-            return <Avatar key={email} email={email} tooltip={`${email} is in the office`} />;
+          {byStatus["officeLocation"].map(({ name, email }) => {
+            return (
+              <Avatar
+                key={email}
+                email={email}
+                tooltip={`${displayName(name, state.people)} is in the office`}
+              />
+            );
           })}
         </div>
       </div>
@@ -581,26 +673,61 @@ function workingDate(date: Temporal.PlainDate = Temporal.Now.plainDateISO()) {
   return nextDay;
 }
 
-const useDevlog =
-  import.meta.env.MODE === "development"
-    ? function useDevlog<T>(state: T) {
-        useEffect(() => {
-          const timeout = setTimeout(() => {}, 500);
+function useDebounce(ms: number, callback: () => void, deps: unknown[]) {
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      callback();
+    }, ms);
 
-          return () => {
-            clearTimeout(timeout);
-          };
-        }, [state]);
-      }
-    : function noop() {};
+    return () => {
+      clearTimeout(timeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...deps, ms]);
+}
+
+function displayName(name: string, people: { name: string }[]) {
+  let result = name;
+
+  const lastNameInitial = name.split(" ")[1]?.[0];
+  if (people.filter((p) => p.name.split(" ")[0] === name.split(" ")[0]).length === 1) {
+    // If no-one has the same first name, just show first name
+    result = name.split(" ")[0];
+  } else if (
+    // If the first letter of the last name is unique, show first name and first letter of last name
+    lastNameInitial &&
+    people.filter((p) => p.name.split(" ")[1]?.[0] === lastNameInitial).length === 1
+  ) {
+    result = `${name.split(" ")[0]} ${lastNameInitial}.`;
+  }
+
+  return result;
+}
 
 function Hoozin() {
   const { fetch } = useGoogleToken();
   const [state, dispatch] = useReducer(stateReducer, {
     events: [],
-    ignorePeople: [],
+    ignorePeople: ignorePeople(localStorage.getItem("ignorePeople")),
+    assumedLocation: workLocation(localStorage.getItem("preferredLocation")),
     people: [],
   });
+
+  useDebounce(
+    1000,
+    () => {
+      localStorage.setItem("preferredLocation", state.assumedLocation);
+    },
+    [state.assumedLocation]
+  );
+
+  useDebounce(
+    1000,
+    () => {
+      localStorage.setItem("ignorePeople", JSON.stringify(Array.from(state.ignorePeople)));
+    },
+    [state.ignorePeople]
+  );
 
   const days = useMemo(() => {
     const days: Temporal.PlainDate[] = [workingDate()];
@@ -612,33 +739,172 @@ function Hoozin() {
     return days;
   }, []);
 
+  const [showSettings, setShowSettings] = useState(false);
+
   useEffect(() => {
     if (days.length === 0) return;
     fetchHoozinData(fetch, dispatch, { minDate: days[0], maxDate: days[days.length - 1] });
   }, [days, fetch, dispatch]);
 
-  useDevlog(state);
+  const lazilySortedPeople = useMemo(
+    () =>
+      state.people.sort((a, b) => {
+        const aIgnored = state.ignorePeople.has(a.email) ? 1 : 0;
+        const bIgnored = state.ignorePeople.has(b.email) ? 1 : 0;
+        if (aIgnored !== bIgnored) {
+          return aIgnored - bIgnored;
+        }
+        return a.name.localeCompare(b.name);
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showSettings]
+  );
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr",
-        gap: "3em",
-        width: "min(32rem, calc(100vw - 64px))",
-        paddingTop: "5rem",
-      }}
-    >
-      {days.map((date, index) => (
-        <DateSummary
-          key={date.toString()}
-          date={date}
-          state={state}
-          showLegend={index === 0}
-          opacity={(6 - index) / 6}
-        />
-      ))}
-    </div>
+    <>
+      <button
+        inert={showSettings}
+        style={{ position: "fixed", bottom: "1rem", right: "1rem", zIndex: 1 }}
+        onClick={() => setShowSettings(true)}
+      >
+        Settings
+      </button>
+      <dialog
+        open={showSettings}
+        className="settings-dialog"
+        onClose={() => setShowSettings(false)}
+      >
+        <form
+          method="dialog"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            textAlign: "left",
+            gap: "1em",
+          }}
+        >
+          <h2>Settings</h2>
+          <label style={{ display: "block" }}>
+            <div>Assume people are</div>
+            <div style={{ display: "flex", gap: "0.75em", flexFlow: "row wrap" }}>
+              <label style={{ display: "flex", gap: "0.25em", alignItems: "center" }}>
+                <input
+                  type="radio"
+                  name="assumedLocation"
+                  value="unknown"
+                  checked={state.assumedLocation === "unknown"}
+                  onChange={() =>
+                    dispatch({
+                      type: "UPDATE_PREFERRED_LOCATION",
+                      location: "unknown",
+                    })
+                  }
+                />
+                TBD
+              </label>
+              <label style={{ display: "flex", gap: "0.25em", alignItems: "center" }}>
+                <input
+                  type="radio"
+                  name="assumedLocation"
+                  value="officeLocation"
+                  checked={state.assumedLocation === "officeLocation"}
+                  onChange={() =>
+                    dispatch({
+                      type: "UPDATE_PREFERRED_LOCATION",
+                      location: "officeLocation",
+                    })
+                  }
+                />
+                in the office
+              </label>
+              <label style={{ display: "flex", gap: "0.25em", alignItems: "center" }}>
+                <input
+                  type="radio"
+                  name="assumedLocation"
+                  value="homeOffice"
+                  checked={state.assumedLocation === "homeOffice"}
+                  onChange={() =>
+                    dispatch({
+                      type: "UPDATE_PREFERRED_LOCATION",
+                      location: "homeOffice",
+                    })
+                  }
+                />
+                working remotely
+              </label>
+            </div>
+          </label>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(8rem, 1fr))",
+              alignItems: "flex-start",
+              columnGap: "0.5em",
+              width: "max(8rem, min(75vw, 32rem))",
+            }}
+          >
+            <div style={{ gridColumn: "1 / -1" }}>Pick people to show</div>
+            {lazilySortedPeople.map(({ name, email }) => {
+              return (
+                <div key={email}>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "flex-start",
+                      textAlign: "left",
+                      gap: "0.25em",
+                      paddingTop: "0.25em",
+                      paddingBottom: "0.25em",
+                      flex: 1,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!state.ignorePeople.has(email)}
+                      onChange={(e) => {
+                        dispatch({
+                          type: "UPDATE_IGNORE_STATE",
+                          email,
+                          ignored: e.target.checked,
+                        });
+                      }}
+                    />
+                    {displayName(name, state.people)}
+                  </label>
+                </div>
+              );
+            })}
+            <div style={{ gridColumn: "1 / -1", fontSize: "0.9rem", color: "#666" }}>
+              Intended to hide employees at other companies that happen to have an account in your
+              Google Workspace.
+            </div>
+          </div>
+          <button style={{ alignSelf: "flex-end" }}>Save and close</button>
+        </form>
+      </dialog>
+      <div
+        inert={showSettings}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          gap: "3em",
+          width: "min(32rem, calc(100vw - 64px))",
+          paddingTop: "5rem",
+        }}
+      >
+        {days.map((date, index) => (
+          <DateSummary
+            key={date.toString()}
+            date={date}
+            state={state}
+            showLegend={index === 0}
+            opacity={(6 - index) / 6}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 

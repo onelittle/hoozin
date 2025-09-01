@@ -15,8 +15,12 @@
 
 a {
   font-weight: 700;
-  color: oklch(70.2% .183 293.541);
-  background: -webkit-linear-gradient(left, oklch(70.2% .183 293.541), oklch(69.113% 0.09591 297.244));
+  color: oklch(70.2% 0.183 293.541);
+  background: -webkit-linear-gradient(
+    left,
+    oklch(70.2% 0.183 293.541),
+    oklch(69.113% 0.09591 297.244)
+  );
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   text-decoration: inherit;
@@ -24,7 +28,7 @@ a {
   padding: 0.5rem;
 }
 a:hover {
-  color: oklch(89.4% .057 293.283);
+  color: oklch(89.4% 0.057 293.283);
   background: none;
   -webkit-background-clip: unset;
   -webkit-text-fill-color: unset;
@@ -101,8 +105,30 @@ h2 {
   gap: 2rem;
 }
 
+.settings-dialog {
+  z-index: 1;
+  position: fixed;
+  border: none;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100dvh;
+  box-sizing: border-box;
+  overflow: scroll;
+}
+
 @media (min-width: 640px) {
   .room-list {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .settings-dialog {
+    border-radius: 1rem;
+    top: 50%;
+    left: 50%;
+    width: fit-content;
+    height: unset;
+    transform: translate(-50%, -50%);
+    box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 0px 100vw;
   }
 }
