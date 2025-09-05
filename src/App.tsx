@@ -491,8 +491,8 @@ function GoogleTokenProvider({ children }: { children: React.ReactNode }) {
         // @ts-expect-error missing types
         const tokenClient = google.accounts.oauth2.initTokenClient({
           client_id: import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID,
-          login_hint,
-          prompt: login_hint ? "none" : "consent",
+          // login_hint,
+          // prompt: login_hint ? "none" : "consent",
           scope:
             "profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/directory.readonly",
           callback: (tokenResponse: TokenResponse) => {
